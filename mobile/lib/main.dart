@@ -74,7 +74,7 @@ class HiveReading {
       '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
 
   String get dateLabel =>
-      '${timestamp.day.toString().padLeft(2, '0')}/${timestamp.month.toString().padLeft(2, '0')} ${timeLabel}';
+      '${timestamp.day.toString().padLeft(2, '0')}/${timestamp.month.toString().padLeft(2, '0')} $timeLabel';
 }
 
 // ─────────────────────────────────────────────
@@ -478,7 +478,7 @@ class _WeightCard extends StatelessWidget {
           ]),
           const SizedBox(height: 10),
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Text('${reading.weight.toStringAsFixed(1)}',
+            Text(reading.weight.toStringAsFixed(1),
                 style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w700, color: AppTheme.honey, height: 1)),
             const Padding(
               padding: EdgeInsets.only(bottom: 4, left: 4),
@@ -522,7 +522,7 @@ class _HourlyStrip extends StatelessWidget {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: readings.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, i) {
           final r = readings[i];
           final isLatest = i == readings.length - 1;
