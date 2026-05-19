@@ -1,9 +1,13 @@
 # ==========================================
-# 1. NODE.JS (Backend)
+# 1. NODE.JS
 # ==========================================
 backend/node_modules/
 backend/.env
 backend/*.log
+
+frontend/node_modules/
+frontend/.env
+frontend/dist/
 
 # ==========================================
 # 2. PLATFORMIO / ARDUINO (Firmware)
@@ -24,8 +28,6 @@ mobile/build/
 mobile/coverage/
 **/doc/api/
 **/ios/Flutter/.last_build_id
-
-# Android/iOS Build Artifacts
 mobile/android/.gradle/
 mobile/android/local.properties
 mobile/android/app/debug/
@@ -34,13 +36,11 @@ mobile/android/app/release/
 mobile/ios/.symlinks/
 mobile/ios/Pods/
 mobile/ios/Flutter/Flutter.podspec
-
-# Flutter Obfuscation & Symbolication
 app.*.symbols
 app.*.map.json
 
 # ==========================================
-# 4. IDEs & SISTEMA (Geral)
+# 4. IDEs & SISTEMA
 # ==========================================
 *.class
 *.log
@@ -53,7 +53,6 @@ app.*.map.json
 .history
 .svn/
 .swiftpm/
-migrate_working_dir/
 *.iml
 *.ipr
 *.iws
