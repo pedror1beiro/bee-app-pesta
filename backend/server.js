@@ -15,6 +15,7 @@ app.use(express.json());
 app.use(cors({
     origin: [
         'http://localhost:5173',
+        'https://bee-app-pesta.vercel.app',
         process.env.FRONTEND_URL || '*'
     ]
 }));
