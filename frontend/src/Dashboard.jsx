@@ -281,16 +281,31 @@ function SelectorColmeia({ colmeias, colmeiaAtiva, onChange, onNova }) {
 }
 
 // ─── MODAL NOVA COLMEIA ───────────────────────────────────────────────────────
+const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
+
 function ModalNovaColmeia({ onFechar, onCriar }) {
   const [nome,        setNome]        = useState("");
   const [localizacao, setLocalizacao] = useState("");
+  const [mac,         setMac]         = useState("");
+  const [macErro,     setMacErro]     = useState("");
   const [loading,     setLoading]     = useState(false);
+
+  function handleMacChange(e) {
+    const val = e.target.value.toUpperCase();
+    setMac(val);
+    if (val && !MAC_REGEX.test(val)) {
+      setMacErro("Formato inválido. Usa XX:XX:XX:XX:XX:XX");
+    } else {
+      setMacErro("");
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (!nome.trim()) return;
+    if (mac && !MAC_REGEX.test(mac)) return;
     setLoading(true);
-    await onCriar({ nome, localizacao });
+    await onCriar({ nome, localizacao, mac_address: mac || null });
     setLoading(false);
     onFechar();
   }
@@ -318,12 +333,29 @@ function ModalNovaColmeia({ onFechar, onCriar }) {
               className="w-full mt-1 px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
             />
           </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              MAC Address do ESP32 (opcional)
+            </label>
+            <input
+              value={mac}
+              onChange={handleMacChange}
+              placeholder="Ex: 28:05:A5:74:07:8C"
+              maxLength={17}
+              className={`w-full mt-1 px-4 py-3 rounded-xl border text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-400
+                ${macErro ? "border-red-300 bg-red-50" : "border-slate-200"}`}
+            />
+            {macErro && <p className="text-xs text-red-500 mt-1">{macErro}</p>}
+            <p className="text-xs text-slate-400 mt-1">
+              Encontras o MAC no monitor série do ESP32 ao arrancar.
+            </p>
+          </div>
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onFechar}
               className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50">
               Cancelar
             </button>
-            <button type="submit" disabled={loading}
+            <button type="submit" disabled={loading || !!macErro}
               className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm disabled:opacity-50">
               {loading ? "A criar..." : "Criar colmeia"}
             </button>

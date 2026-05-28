@@ -16,6 +16,7 @@ firmware/.pio/
 firmware/.clang_complete
 firmware/.gcc-flags.json
 firmware/lib/README
+firmware/src/credentials.h
 
 # ==========================================
 # 3. FLUTTER / DART (Mobile)

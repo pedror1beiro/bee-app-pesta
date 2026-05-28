@@ -319,22 +319,6 @@ export default function LoginPage({ onSucesso }) {
           </div>
         </div>
 
-        {/* Credenciais de teste */}
-        <div className="mt-4 bg-white/60 backdrop-blur rounded-2xl border border-amber-100 p-4">
-          <p className="text-xs font-bold text-amber-700 mb-2">🧪 Credenciais de teste:</p>
-          <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-            <div className="bg-amber-50 rounded-lg p-2">
-              <p className="font-semibold text-amber-800">Admin</p>
-              <p>admin@beeapp.pt</p>
-              <p className="font-mono">password</p>
-            </div>
-            <div className="bg-amber-50 rounded-lg p-2">
-              <p className="font-semibold text-amber-800">Apicultor</p>
-              <p>joao@beeapp.pt</p>
-              <p className="font-mono">password</p>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

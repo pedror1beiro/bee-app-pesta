@@ -25,6 +25,7 @@ CREATE TABLE colmeias (
     latitude        DECIMAL(10, 8),
     longitude       DECIMAL(11, 8),
     ativa           BOOLEAN NOT NULL DEFAULT TRUE,
+    mac_address     VARCHAR(17) UNIQUE,
     criado_em       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (utilizador_id) REFERENCES utilizadores(id) ON DELETE CASCADE
 );

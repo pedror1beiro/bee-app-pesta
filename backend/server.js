@@ -4,21 +4,32 @@ const mysql      = require('mysql2/promise');
 const cors       = require('cors');
 const bcrypt     = require('bcrypt');
 const jwt        = require('jsonwebtoken');
+const helmet     = require('helmet');
+const rateLimit  = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
 const { body, validationResult } = require('express-validator');
 
 const app    = express();
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+// Necessário para rate limiting correcto atrás do proxy do Railway
+app.set('trust proxy', 1);
+
 // ─── MIDDLEWARES ─────────────────────────────────────────────────────────────
+app.use(helmet());
 app.use(express.json());
-app.use(cors({
-    origin: [
-        'http://localhost:5173',
-        'https://bee-app-pesta.vercel.app',
-        process.env.FRONTEND_URL || '*'
-    ]
-}));
+
+const origens = ['http://localhost:5173', 'https://bee-app-pesta.vercel.app'];
+if (process.env.FRONTEND_URL) origens.push(process.env.FRONTEND_URL);
+app.use(cors({ origin: origens, credentials: true }));
+
+const limiteAuth = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: { erro: 'Demasiadas tentativas. Tenta novamente em 15 minutos.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
 
 // ─── LIGAÇÃO À BASE DE DADOS ──────────────────────────────────────────────────
 const db = mysql.createPool({
@@ -87,7 +98,7 @@ function apenasAdmin(req, res, next) {
  * POST /api/auth/registar
  * Criar nova conta com email + password
  */
-app.post('/api/auth/registar', [
+app.post('/api/auth/registar', limiteAuth, [
     body('nome').trim().notEmpty().withMessage('Nome é obrigatório.'),
     body('email').isEmail().withMessage('Email inválido.'),
     body('password').isLength({ min: 8 }).withMessage('Password deve ter pelo menos 8 caracteres.'),
@@ -127,7 +138,7 @@ app.post('/api/auth/registar', [
  * POST /api/auth/login
  * Login com email + password → devolve access token + refresh token
  */
-app.post('/api/auth/login', [
+app.post('/api/auth/login', limiteAuth, [
     body('email').isEmail().withMessage('Email inválido.'),
     body('password').notEmpty().withMessage('Password é obrigatória.'),
 ], async (req, res) => {
@@ -184,7 +195,7 @@ app.post('/api/auth/login', [
  * POST /api/auth/google
  * Login / Registo com Google OAuth (envia o idToken do frontend)
  */
-app.post('/api/auth/google', async (req, res) => {
+app.post('/api/auth/google', limiteAuth, async (req, res) => {
     const { idToken } = req.body;
     if (!idToken) return res.status(400).json({ erro: 'Token Google em falta.' });
 
@@ -245,27 +256,28 @@ app.post('/api/auth/google', async (req, res) => {
  * POST /api/auth/refresh
  * Renovar access token com refresh token
  */
-app.post('/api/auth/refresh', async (req, res) => {
+app.post('/api/auth/refresh', limiteAuth, async (req, res) => {
     const { refreshToken } = req.body;
     if (!refreshToken) return res.status(401).json({ erro: 'Refresh token em falta.' });
 
     try {
-        // Verificar se existe na BD e não expirou
         const [rows] = await db.query(
             'SELECT * FROM refresh_tokens WHERE token = ? AND expira_em > NOW()',
             [refreshToken]
         );
         if (rows.length === 0) return res.status(403).json({ erro: 'Refresh token inválido ou expirado.' });
 
-        jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET, async (err, decoded) => {
-            if (err) return res.status(403).json({ erro: 'Refresh token inválido.' });
+        let decoded;
+        try {
+            decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+        } catch {
+            return res.status(403).json({ erro: 'Refresh token inválido.' });
+        }
 
-            const [userRows] = await db.query('SELECT * FROM utilizadores WHERE id = ?', [decoded.id]);
-            if (userRows.length === 0) return res.status(403).json({ erro: 'Utilizador não encontrado.' });
+        const [userRows] = await db.query('SELECT * FROM utilizadores WHERE id = ?', [decoded.id]);
+        if (userRows.length === 0) return res.status(403).json({ erro: 'Utilizador não encontrado.' });
 
-            const novoAccessToken = gerarAccessToken(userRows[0]);
-            res.json({ accessToken: novoAccessToken });
-        });
+        res.json({ accessToken: gerarAccessToken(userRows[0]) });
     } catch (err) {
         console.error('Erro ao renovar token:', err);
         res.status(500).json({ erro: 'Erro interno.' });
@@ -330,17 +342,17 @@ app.post('/api/colmeias', autenticar, [
     const erros = validationResult(req);
     if (!erros.isEmpty()) return res.status(400).json({ erros: erros.array() });
 
-    const { nome, localizacao, latitude, longitude } = req.body;
+    const { nome, localizacao, latitude, longitude, mac_address } = req.body;
     const utilizador_id = req.utilizador.id;
 
     try {
         const [result] = await db.query(
-            'INSERT INTO colmeias (utilizador_id, nome, localizacao, latitude, longitude) VALUES (?, ?, ?, ?, ?)',
-            [utilizador_id, nome, localizacao || null, latitude || null, longitude || null]
+            'INSERT INTO colmeias (utilizador_id, nome, localizacao, latitude, longitude, mac_address) VALUES (?, ?, ?, ?, ?, ?)',
+            [utilizador_id, nome, localizacao || null, latitude || null, longitude || null, mac_address ? mac_address.toUpperCase() : null]
         );
         res.status(201).json({
             mensagem: 'Colmeia criada com sucesso!',
-            colmeia: { id: result.insertId, utilizador_id, nome, localizacao, latitude, longitude }
+            colmeia: { id: result.insertId, utilizador_id, nome, localizacao, latitude, longitude, mac_address: mac_address || null }
         });
     } catch (err) {
         console.error('Erro ao criar colmeia:', err);
@@ -386,15 +398,28 @@ app.post('/api/leitura', async (req, res) => {
         return res.status(401).json({ erro: 'API Key inválida.' });
     }
 
-    const { colmeia_id, temperatura, humidade, peso, entradas_abelhas, saidas_abelhas, nivel_bateria } = req.body;
-    const id_colmeia = colmeia_id || 1;
+    const { mac_address, temperatura, humidade, peso, entradas_abelhas, saidas_abelhas, nivel_bateria } = req.body;
 
-    const query = `INSERT INTO leituras_colmeia 
-        (colmeia_id, temperatura, humidade, peso, entradas_abelhas, saidas_abelhas, nivel_bateria) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)`;
+    if (!mac_address) {
+        return res.status(400).json({ erro: 'mac_address em falta no corpo do pedido.' });
+    }
 
     try {
-        await db.query(query, [id_colmeia, temperatura, humidade, peso, entradas_abelhas, saidas_abelhas, nivel_bateria]);
+        const [colmeiaRows] = await db.query(
+            'SELECT id FROM colmeias WHERE mac_address = ?',
+            [mac_address.toUpperCase()]
+        );
+        if (colmeiaRows.length === 0) {
+            return res.status(404).json({ erro: 'MAC address não registado. Associa este ESP32 a uma colmeia no website.' });
+        }
+        const id_colmeia = colmeiaRows[0].id;
+
+        await db.query(
+            `INSERT INTO leituras_colmeia
+             (colmeia_id, temperatura, humidade, peso, entradas_abelhas, saidas_abelhas, nivel_bateria)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [id_colmeia, temperatura, humidade, peso ?? 0, entradas_abelhas ?? 0, saidas_abelhas ?? 0, nivel_bateria ?? 0]
+        );
         res.status(201).json({ mensagem: `Dados da colmeia ${id_colmeia} registados com sucesso.` });
     } catch (err) {
         console.error('Erro ao inserir dados:', err);
@@ -464,6 +489,16 @@ app.get('/api/alertas', autenticar, async (req, res) => {
  */
 app.patch('/api/alertas/:id/lido', autenticar, async (req, res) => {
     try {
+        const [rows] = await db.query(`
+            SELECT a.id FROM alertas_colmeia a
+            JOIN colmeias c ON a.colmeia_id = c.id
+            WHERE a.id = ? AND (c.utilizador_id = ? OR ? = 'admin')
+        `, [req.params.id, req.utilizador.id, req.utilizador.role]);
+
+        if (rows.length === 0) {
+            return res.status(403).json({ erro: 'Sem permissão para alterar este alerta.' });
+        }
+
         await db.query('UPDATE alertas_colmeia SET lido = TRUE WHERE id = ?', [req.params.id]);
         res.json({ mensagem: 'Alerta marcado como lido.' });
     } catch (err) {
@@ -497,7 +532,7 @@ app.get('/api/admin/utilizadores', autenticar, apenasAdmin, async (req, res) => 
  * Ativar/desativar utilizador (apenas admin)
  */
 app.patch('/api/admin/utilizadores/:id/ativar', autenticar, apenasAdmin, async (req, res) => {
-    const { ativo } = req.body;
+    const ativo = req.body.ativo === true || req.body.ativo === 1;
     try {
         await db.query('UPDATE utilizadores SET ativo = ? WHERE id = ?', [ativo, req.params.id]);
         res.json({ mensagem: `Utilizador ${ativo ? 'ativado' : 'desativado'} com sucesso.` });
