@@ -113,6 +113,7 @@ void setup() {
     unsigned long t0 = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_TIMEOUT_MS) {
         delay(500);
+        Serial.printf("[WiFi] Status: %d\n", WiFi.status());
     }
 
     if (WiFi.status() == WL_CONNECTED) {
