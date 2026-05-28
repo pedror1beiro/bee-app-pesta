@@ -403,9 +403,14 @@ export default function Dashboard({ utilizador, onLogout }) {
         const res  = await apiFetch("/api/colmeias");
         const json = await res.json();
         setColmeias(json);
-        if (json.length > 0) setColmeiaAtiva(json[0]);
+        if (json.length > 0) {
+          setColmeiaAtiva(json[0]);
+        } else {
+          setStatus("online");
+        }
       } catch (err) {
         setErro("Não foi possível carregar as colmeias.");
+        setStatus("error");
       }
     }
     carregarColmeias();
