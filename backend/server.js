@@ -355,6 +355,9 @@ app.post('/api/colmeias', autenticar, [
             colmeia: { id: result.insertId, utilizador_id, nome, localizacao, latitude, longitude, mac_address: mac_address || null }
         });
     } catch (err) {
+        if (err.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ erro: 'Este MAC address já está associado a outra colmeia.' });
+        }
         console.error('Erro ao criar colmeia:', err);
         res.status(500).json({ erro: 'Erro interno ao criar colmeia.' });
     }

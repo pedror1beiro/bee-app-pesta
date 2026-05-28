@@ -288,11 +288,13 @@ function ModalNovaColmeia({ onFechar, onCriar }) {
   const [localizacao, setLocalizacao] = useState("");
   const [mac,         setMac]         = useState("");
   const [macErro,     setMacErro]     = useState("");
+  const [erroGeral,   setErroGeral]   = useState("");
   const [loading,     setLoading]     = useState(false);
 
   function handleMacChange(e) {
     const val = e.target.value.toUpperCase();
     setMac(val);
+    setErroGeral("");
     if (val && !MAC_REGEX.test(val)) {
       setMacErro("Formato inválido. Usa XX:XX:XX:XX:XX:XX");
     } else {
@@ -304,16 +306,27 @@ function ModalNovaColmeia({ onFechar, onCriar }) {
     e.preventDefault();
     if (!nome.trim()) return;
     if (mac && !MAC_REGEX.test(mac)) return;
+    setErroGeral("");
     setLoading(true);
-    await onCriar({ nome, localizacao, mac_address: mac || null });
-    setLoading(false);
-    onFechar();
+    try {
+      await onCriar({ nome, localizacao, mac_address: mac || null });
+      onFechar();
+    } catch (err) {
+      setErroGeral(err.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
         <h2 className="text-lg font-bold text-slate-800 mb-4">🐝 Nova Colmeia</h2>
+        {erroGeral && (
+          <div className="mb-2 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
+            {erroGeral}
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Nome</label>
@@ -442,18 +455,15 @@ export default function Dashboard({ utilizador, onLogout }) {
 
   // Criar nova colmeia
   async function criarColmeia(dados) {
-    try {
-      const res  = await apiFetch("/api/colmeias", {
-        method: "POST",
-        body: JSON.stringify(dados),
-      });
-      const json = await res.json();
-      const nova = json.colmeia;
-      setColmeias(prev => [...prev, nova]);
-      setColmeiaAtiva(nova);
-    } catch (err) {
-      alert("Erro ao criar colmeia.");
-    }
+    const res  = await apiFetch("/api/colmeias", {
+      method: "POST",
+      body: JSON.stringify(dados),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.erro || "Erro ao criar colmeia.");
+    const nova = json.colmeia;
+    setColmeias(prev => [...prev, nova]);
+    setColmeiaAtiva(nova);
   }
 
   return (
