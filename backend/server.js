@@ -431,6 +431,52 @@ app.post('/api/leitura', async (req, res) => {
 });
 
 /**
+ * POST /api/colmeias/:id/leituras
+ * Sincronização em lote via BLE — protegido por JWT (não requer API Key)
+ */
+app.post('/api/colmeias/:id/leituras', autenticar, async (req, res) => {
+    const colmeiaId = req.params.id;
+    const { leituras } = req.body;
+
+    if (!Array.isArray(leituras) || leituras.length === 0) {
+        return res.status(400).json({ erro: 'Array de leituras em falta ou vazio.' });
+    }
+
+    try {
+        const [colmeiaRows] = await db.query(
+            'SELECT id FROM colmeias WHERE id = ? AND (utilizador_id = ? OR ? = "admin")',
+            [colmeiaId, req.utilizador.id, req.utilizador.role]
+        );
+        if (colmeiaRows.length === 0) {
+            return res.status(403).json({ erro: 'Sem permissão para esta colmeia.' });
+        }
+
+        const values = leituras.map(l => [
+            colmeiaId,
+            l.timestamp,
+            l.temperatura   ?? 0,
+            l.humidade      ?? 0,
+            l.peso          ?? 0,
+            l.entradas_abelhas ?? 0,
+            l.saidas_abelhas   ?? 0,
+            l.nivel_bateria ?? 0,
+        ]);
+
+        await db.query(
+            `INSERT INTO leituras_colmeia
+             (colmeia_id, timestamp, temperatura, humidade, peso, entradas_abelhas, saidas_abelhas, nivel_bateria)
+             VALUES ?`,
+            [values]
+        );
+
+        res.status(201).json({ mensagem: `${leituras.length} leituras sincronizadas com sucesso.` });
+    } catch (err) {
+        console.error('Erro ao sincronizar leituras BLE:', err);
+        res.status(500).json({ erro: 'Erro interno ao sincronizar.' });
+    }
+});
+
+/**
  * GET /api/dados/:colmeia_id
  * Leitura dos últimos 20 registos — protegido (só o dono ou admin)
  */
