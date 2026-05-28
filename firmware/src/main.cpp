@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <time.h>
 #include "credentials.h"
 
 // ─── Pinos ────────────────────────────────────────────────────
@@ -15,8 +16,12 @@
 #define SD_CS         5
 #define PIN_SENSORES  15
 
-// ─── WiFi ─────────────────────────────────────────────────────
-#define WIFI_TIMEOUT_MS 15000
+// ─── WiFi / NTP ───────────────────────────────────────────────
+#define WIFI_TIMEOUT_MS  15000
+#define NTP_TIMEOUT_MS    5000
+// Portugal: UTC+0 base (WET) + 1h DST no verão (WEST)
+#define TZ_GMT_OFFSET    0
+#define TZ_DST_OFFSET    3600
 
 // ─── API ──────────────────────────────────────────────────────
 #define API_URL  "https://bee-app-pesta.up.railway.app/api/leitura"
@@ -33,7 +38,7 @@ void setup() {
     delay(500);
     Serial.println("=== ESP32 Acordou ===");
 
-    // Inicia WiFi cedo para ligar em paralelo com os sensores
+    // WiFi inicia cedo para ligar em paralelo com os sensores
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     String mac = WiFi.macAddress();
     Serial.print("[WiFi] MAC: ");
@@ -44,25 +49,14 @@ void setup() {
     digitalWrite(PIN_SENSORES, HIGH);
     delay(100);
 
-    // ─── RTC ───────────────────────────────────────────────────
-    DateTime now(2000, 1, 1, 0, 0, 0);   // fallback se RTC falhar
+    // ─── RTC (init apenas — leitura feita depois do NTP) ───────
     Wire.begin(21, 22);
-    if (!rtc.begin()) {
-        Serial.println("[ERRO] RTC não encontrado!");
-    } else {
-        if (rtc.lostPower()) {
-            rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-            Serial.println("[RTC] Hora actualizada para hora de compilação");
-        }
-        now = rtc.now();
-        Serial.printf("[RTC] %04d/%02d/%02d %02d:%02d:%02d\n",
-            now.year(), now.month(), now.day(),
-            now.hour(), now.minute(), now.second());
-    }
+    bool rtcOk = rtc.begin();
+    if (!rtcOk) Serial.println("[ERRO] RTC não encontrado!");
 
-    // ─── DHT22 ─────────────────────────────────────────────────
+    // ─── DHT22 (2s warmup — WiFi liga em paralelo) ─────────────
     dht.begin();
-    delay(2000);    // tempo de estabilização do sensor
+    delay(2000);
     float temperatura = dht.readTemperature();
     float humidade    = dht.readHumidity();
 
@@ -72,6 +66,41 @@ void setup() {
         humidade    = 0.0f;
     } else {
         Serial.printf("[DHT22] Temp: %.1f C  |  Hum: %.1f %%\n", temperatura, humidade);
+    }
+
+    // ─── Aguarda WiFi ──────────────────────────────────────────
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_TIMEOUT_MS) {
+        delay(500);
+    }
+    bool wifiOk = (WiFi.status() == WL_CONNECTED);
+
+    // ─── NTP → actualiza RTC ───────────────────────────────────
+    if (wifiOk && rtcOk) {
+        configTime(TZ_GMT_OFFSET, TZ_DST_OFFSET, "pool.ntp.org", "time.google.com");
+        struct tm timeinfo;
+        if (getLocalTime(&timeinfo, NTP_TIMEOUT_MS)) {
+            rtc.adjust(DateTime(
+                timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                timeinfo.tm_hour,        timeinfo.tm_min,      timeinfo.tm_sec
+            ));
+            Serial.println("[NTP] RTC sincronizado.");
+        } else {
+            Serial.println("[NTP] Timeout — a usar hora do RTC.");
+        }
+    } else if (rtcOk && rtc.lostPower()) {
+        // Último recurso: hora de compilação (só se não houver WiFi e RTC perdeu hora)
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+        Serial.println("[RTC] Sem NTP e sem hora — a usar hora de compilação.");
+    }
+
+    // ─── Lê RTC (já com hora correcta) ────────────────────────
+    DateTime now(2000, 1, 1, 0, 0, 0);
+    if (rtcOk) {
+        now = rtc.now();
+        Serial.printf("[RTC] %04d/%02d/%02d %02d:%02d:%02d\n",
+            now.year(), now.month(), now.day(),
+            now.hour(), now.minute(), now.second());
     }
 
     // ─── MicroSD ───────────────────────────────────────────────
@@ -107,20 +136,12 @@ void setup() {
         }
     }
 
-    // ─── WiFi + HTTP POST ──────────────────────────────────────
-    // O WiFi começou a ligar no início do setup(); normalmente já
-    // está pronto aqui porque a leitura do DHT22 demora ~2s.
-    unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_TIMEOUT_MS) {
-        delay(500);
-        Serial.printf("[WiFi] Status: %d\n", WiFi.status());
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
+    // ─── HTTP POST ─────────────────────────────────────────────
+    if (wifiOk) {
         Serial.println("[WiFi] Ligado.");
 
         WiFiClientSecure client;
-        client.setInsecure();   // sem verificação de certificado (protótipo)
+        client.setInsecure();
 
         HTTPClient http;
         http.begin(client, API_URL);
