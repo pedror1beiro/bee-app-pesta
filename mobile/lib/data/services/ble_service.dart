@@ -105,6 +105,7 @@ class BleNotifier extends StateNotifier<BleState> {
 
     try {
       await device.connect(timeout: const Duration(seconds: 10));
+      await device.requestMtu(512);
 
       final services = await device.discoverServices();
       final svc = services.firstWhere(

@@ -55,6 +55,7 @@ const db = mysql.createPool({
     database: process.env.MYSQLDATABASE || process.env.DB_NAME,
     waitForConnections: true,
     connectionLimit: 10,
+    decimalNumbers: true,  // DECIMAL columns returned as numbers, not strings
 });
 
 // Teste de ligação ao arrancar

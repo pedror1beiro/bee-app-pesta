@@ -21,16 +21,19 @@ class Leitura {
     required this.nivelBateria,
   });
 
+  static double _d(dynamic v) =>
+      v is num ? v.toDouble() : double.parse('$v');
+
   factory Leitura.fromJson(Map<String, dynamic> j) => Leitura(
         id:              j['id']               as int?,
         colmeiaId:       j['colmeia_id']       as int,
         timestamp:       DateTime.parse(j['timestamp'] as String),
-        temperatura:     (j['temperatura']     as num).toDouble(),
-        humidade:        (j['humidade']        as num).toDouble(),
-        peso:            (j['peso']            as num).toDouble(),
+        temperatura:     _d(j['temperatura']),
+        humidade:        _d(j['humidade']),
+        peso:            _d(j['peso']),
         entradasAbelhas: (j['entradas_abelhas'] as num?)?.toInt() ?? 0,
         saidasAbelhas:   (j['saidas_abelhas']   as num?)?.toInt() ?? 0,
-        nivelBateria:    (j['nivel_bateria']   as num).toDouble(),
+        nivelBateria:    _d(j['nivel_bateria']),
       );
 
   /// Parses a CSV line: timestamp,temperatura,humidade,peso,entradas,saidas,bateria
