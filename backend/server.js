@@ -19,9 +19,24 @@ app.set('trust proxy', 1);
 app.use(helmet());
 app.use(express.json());
 
-const origens = ['http://localhost:5173', 'https://bee-app-pesta.vercel.app'];
-if (process.env.FRONTEND_URL) origens.push(process.env.FRONTEND_URL);
-app.use(cors({ origin: origens, credentials: true }));
+const origensProducao = [
+    'https://bee-app-pesta.vercel.app',
+    process.env.FRONTEND_URL,
+].filter(Boolean);
+
+app.use(cors({
+    origin: (origin, callback) => {
+        // Permite pedidos sem origin (ex: mobile nativo, curl)
+        if (!origin) return callback(null, true);
+        // Permite qualquer localhost em desenvolvimento
+        if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+            return callback(null, true);
+        }
+        if (origensProducao.includes(origin)) return callback(null, true);
+        callback(new Error('Origem não permitida pelo CORS.'));
+    },
+    credentials: true,
+}));
 
 const limiteAuth = rateLimit({
     windowMs: 15 * 60 * 1000,

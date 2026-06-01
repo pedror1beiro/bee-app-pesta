@@ -73,13 +73,12 @@ class AuthNotifier extends StateNotifier<AsyncValue<Utilizador?>> {
   }
 
   Future<void> login(String email, String password) async {
-    state = const AsyncValue.loading();
     try {
       final user = await _repo.login(email, password);
       state = AsyncValue.data(user);
     } catch (e, s) {
       state = AsyncValue.error(e, s);
-      rethrow;
+      // Sem rethrow — o erro fica no estado e é lido via ref.listen na página
     }
   }
 

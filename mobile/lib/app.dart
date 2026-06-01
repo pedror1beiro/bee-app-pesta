@@ -17,10 +17,11 @@ class ColmeiaSmartApp extends ConsumerWidget {
       title: 'Colmeia Smart',
       theme: AppTheme.theme,
       debugShowCheckedModeBanner: false,
-      home: authState.when(
+      home: authState.maybeWhen(
         loading: () => const _Splash(),
-        error:   (_, _) => const LoginPage(),
-        data:    (user) => user != null ? const AppShell() : const LoginPage(),
+        orElse:  () => authState.valueOrNull != null
+            ? const AppShell()
+            : const LoginPage(),
       ),
     );
   }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/models/utilizador.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../shared/widgets/hex_badge.dart';
 import 'register_page.dart';
@@ -27,19 +28,29 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   Future<void> _login() async {
+    if (!mounted) return;
     setState(() { _loading = true; _error = null; });
-    try {
-      await ref.read(authProvider.notifier)
-          .login(_emailCtrl.text.trim(), _passwordCtrl.text);
-    } catch (e) {
-      setState(() => _error = e.toString().replaceAll('Exception: ', ''));
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+    await ref.read(authProvider.notifier)
+        .login(_emailCtrl.text.trim(), _passwordCtrl.text);
+    if (mounted) setState(() => _loading = false);
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<Utilizador?>>(authProvider, (_, next) {
+      if (!mounted) return;
+      next.whenOrNull(
+        error: (e, _) => setState(() {
+          _loading = false;
+          _error = e.toString()
+              .replaceAll('Exception: ', '')
+              .replaceAll('DioException [bad response]: ', '')
+              .contains('401')
+              ? 'Credenciais inválidas.'
+              : 'Erro de ligação. Verifica a internet.';
+        }),
+      );
+    });
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
