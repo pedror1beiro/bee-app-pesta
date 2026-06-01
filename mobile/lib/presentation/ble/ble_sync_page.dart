@@ -199,7 +199,7 @@ class _DeviceTile extends ConsumerWidget {
             style: TextStyle(color: AppTheme.wax)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
-          children: colmeias.map((c) => ListTile(
+          children: colmeias.map<Widget>((c) => ListTile(
             title: Text(c.nome,
                 style: const TextStyle(color: AppTheme.wax)),
             subtitle: c.macAddress != null
@@ -235,7 +235,7 @@ class _PendingSection extends ConsumerWidget {
         if (colmeias.isEmpty) return const SizedBox.shrink();
 
         return Column(
-          children: colmeias.map((c) {
+          children: colmeias.map<Widget>((c) {
             final count = ref.read(leituraRepositoryProvider).pendingCount(c.id);
             if (count == 0) return const SizedBox.shrink();
 
