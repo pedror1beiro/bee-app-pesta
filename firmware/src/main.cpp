@@ -8,51 +8,98 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <time.h>
+#include <HX711_ADC.h>
 #include <NimBLEDevice.h>
+#include <Preferences.h>
 #include "credentials.h"
 
-// ─── Pinos ────────────────────────────────────────────────────
-#define DHTPIN        4
-#define DHTTYPE       DHT22
-#define SD_CS         5
-#define PIN_SENSORES  15
+// ─── Modo ─────────────────────────────────────────────────────────────────────
+// Comentado = BASE  (deep sleep 10 min, sem contagem IR)
+// Descomentado = PREMIUM (sempre activo, contagem IR por interrupção)
+// #define PREMIUM_MODE
 
-// ─── WiFi / NTP ───────────────────────────────────────────────
-#define WIFI_TIMEOUT_MS  15000
-#define NTP_TIMEOUT_MS    5000
-// Portugal: UTC+0 (WET) + 1h DST verão (WEST)
-#define TZ_GMT_OFFSET    0
-#define TZ_DST_OFFSET    3600
+// ─── Pinos ────────────────────────────────────────────────────────────────────
+#define DHTPIN         4
+#define DHTTYPE        DHT22
+#define SD_CS          5
+#define PIN_SENSORES   15
+#define HX711_DT       34       // input-only — OK para dados
+#define HX711_SCK      32
+#define IR_A_PIN       25       // Sensor A DOUT
+#define IR_B_PIN       26       // Sensor B DOUT
 
-// ─── API ──────────────────────────────────────────────────────
-#define API_URL  "https://bee-app-pesta.up.railway.app/api/leitura"
+// ─── Constantes ───────────────────────────────────────────────────────────────
+#define WIFI_TIMEOUT_MS    15000
+#define NTP_TIMEOUT_MS      5000
+#define TZ_GMT_OFFSET          0
+#define TZ_DST_OFFSET       3600
+#define API_URL   "https://bee-app-pesta.up.railway.app/api/leitura"
+#define SLEEP_SECS            60
+#define uS_TO_S        1000000ULL
+#define REPORT_MS        60000UL   // Premium: 1 min em milissegundos
+#define CAL_FACTOR     94803.35f
+#define HX711_SAMPLES       10
+#define IR_WINDOW_MS       300UL
+#ifdef PREMIUM_MODE
+#  define BLE_WAIT_MS    10000
+#else
+#  define BLE_WAIT_MS    30000
+#endif
 
-// ─── Deep Sleep ───────────────────────────────────────────────
-#define SLEEP_SEGUNDOS  600
-#define uS_TO_S_FACTOR  1000000ULL
-
-// ─── BLE GATT ─────────────────────────────────────────────────
-#define BLE_DEVICE_NAME  "Colmeia_Smart"
-#define BLE_SVC_UUID     "12345678-1234-1234-1234-123456789abc"
-#define BLE_CHAR_DATA    "12345678-1234-1234-1234-123456789abd"
-#define BLE_CHAR_CMD     "12345678-1234-1234-1234-123456789abe"
-#define BLE_WAIT_MS      30000   // 30s à espera de ligação
-
-// ─── Globais ──────────────────────────────────────────────────
+// ─── Objectos ─────────────────────────────────────────────────────────────────
 RTC_DS3231 rtc;
-DHT dht(DHTPIN, DHTTYPE);
+DHT        dht(DHTPIN, DHTTYPE);
+HX711_ADC  scale(HX711_DT, HX711_SCK);
 
-NimBLECharacteristic* pDataChar   = nullptr;
-volatile bool         bleSyncReq  = false;
-volatile bool         bleDone     = false;
+// ─── Estado global ────────────────────────────────────────────────────────────
+static String g_mac;
+static bool   g_rtcOk = false;
+static bool   g_sdOk  = false;
 
-// ─── Callbacks BLE ────────────────────────────────────────────
+// ─── Contadores IR (apenas Premium) ──────────────────────────────────────────
+#ifdef PREMIUM_MODE
+volatile unsigned long irATime = 0;
+volatile unsigned long irBTime = 0;
+volatile int g_entradas = 0;
+volatile int g_saidas   = 0;
+
+void IRAM_ATTR onIrA() {
+    unsigned long now = millis();
+    if (irBTime > 0 && (now - irBTime) < IR_WINDOW_MS) {
+        g_entradas++;   // B antes de A → ENTRADA
+        irBTime = 0; irATime = 0;
+    } else {
+        irATime = now;
+    }
+}
+
+void IRAM_ATTR onIrB() {
+    unsigned long now = millis();
+    if (irATime > 0 && (now - irATime) < IR_WINDOW_MS) {
+        g_saidas++;     // A antes de B → SAÍDA
+        irATime = 0; irBTime = 0;
+    } else {
+        irBTime = now;
+    }
+}
+#endif
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BLE GATT SERVER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+NimBLECharacteristic* pDataChar = nullptr;
+volatile bool bleSyncReq = false;
+volatile bool bleDone    = false;
+
+volatile bool bleTareReq = false;
 
 class CmdCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pChar) override {
         std::string v = pChar->getValue();
         if (v == "SYNC") bleSyncReq = true;
         else if (v == "END") bleDone = true;
+        else if (v == "TARE") bleTareReq = true;
     }
 };
 
@@ -63,8 +110,6 @@ class SrvCallbacks : public NimBLEServerCallbacks {
     }
 };
 
-// ─── Servidor GATT ────────────────────────────────────────────
-
 void runBleServer(const char* csvPath) {
     bleSyncReq = false;
     bleDone    = false;
@@ -72,231 +117,294 @@ void runBleServer(const char* csvPath) {
     NimBLEDevice::init(BLE_DEVICE_NAME);
     NimBLEDevice::setMTU(512);
 
-    NimBLEServer* pSrv = NimBLEDevice::createServer();
+    NimBLEServer*  pSrv = NimBLEDevice::createServer();
     pSrv->setCallbacks(new SrvCallbacks());
-
-    NimBLEService* pSvc = pSrv->createService(BLE_SVC_UUID);
+    NimBLEService* pSvc = pSrv->createService("12345678-1234-1234-1234-123456789abc");
 
     pDataChar = pSvc->createCharacteristic(
-        BLE_CHAR_DATA,
-        NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ
-    );
+        "12345678-1234-1234-1234-123456789abd",
+        NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ);
 
-    NimBLECharacteristic* pCmdChar = pSvc->createCharacteristic(
-        BLE_CHAR_CMD,
-        NIMBLE_PROPERTY::WRITE
-    );
-    pCmdChar->setCallbacks(new CmdCallbacks());
+    NimBLECharacteristic* pCmd = pSvc->createCharacteristic(
+        "12345678-1234-1234-1234-123456789abe",
+        NIMBLE_PROPERTY::WRITE);
+    pCmd->setCallbacks(new CmdCallbacks());
 
     pSvc->start();
-
     NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
-    pAdv->addServiceUUID(BLE_SVC_UUID);
+    pAdv->addServiceUUID("12345678-1234-1234-1234-123456789abc");
     pAdv->start();
-
     Serial.println("[BLE] A anunciar 'Colmeia_Smart'...");
 
     unsigned long t0 = millis();
-
     while (!bleDone && (millis() - t0 < BLE_WAIT_MS)) {
         if (bleSyncReq) {
             bleSyncReq = false;
-            Serial.println("[BLE] SYNC recebido. A enviar CSV...");
-
+            Serial.println("[BLE] SYNC recebido.");
             File f = SD.open(csvPath);
             if (f) {
                 int n = 0;
                 while (f.available()) {
                     String line = f.readStringUntil('\n');
                     line.trim();
-                    if (line.length() == 0) continue;
+                    if (!line.length()) continue;
                     pDataChar->setValue(line.c_str());
                     pDataChar->notify();
                     n++;
-                    delay(20);   // evita saturar o buffer BLE
+                    delay(20);
                 }
                 f.close();
                 Serial.printf("[BLE] %d linhas enviadas.\n", n);
             } else {
                 Serial.println("[BLE] Erro ao abrir CSV.");
             }
-
-            // Marcador de fim
             pDataChar->setValue("END");
             pDataChar->notify();
             delay(500);
             bleDone = true;
         }
+        if (bleTareReq) {
+            bleTareReq = false;
+            Serial.println("[BLE] TARE recebido — a tarar...");
+            scale.tare();
+            float offset = scale.getTareOffset();
+            Preferences prefs;
+            prefs.begin("hx711", false);
+            prefs.putFloat("tare", offset);
+            prefs.end();
+            Serial.printf("[HX711] Nova tara guardada: %.1f\n", offset);
+            pDataChar->setValue("TARE_OK");
+            pDataChar->notify();
+        }
         delay(50);
     }
 
-    if (!bleDone) Serial.println("[BLE] Timeout — sem ligação BLE.");
-    else          Serial.println("[BLE] Sincronização concluída.");
-
+    if (!bleDone) Serial.println("[BLE] Timeout sem ligação.");
     NimBLEDevice::stopAdvertising();
     NimBLEDevice::deinit(true);
     pDataChar = nullptr;
 }
 
-// ─── Setup ────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
 
-void setup() {
-    Serial.begin(115200);
-    delay(500);
-    Serial.println("=== ESP32 Acordou ===");
+float readWeight() {
+    float sum = 0;
+    int   got = 0;
+    unsigned long t = millis();
+    while (got < HX711_SAMPLES && millis() - t < 5000) {
+        if (scale.update()) {
+            sum += scale.getData();
+            got++;
+            delay(50);
+        }
+    }
+    if (!got) { Serial.println("[HX711] Sem leituras."); return 0.0f; }
+    float w = sum / got;
+    Serial.printf("[HX711] %.3f kg (%d amostras)\n", w, got);
+    return w;
+}
 
-    // WiFi inicia cedo para ligar em paralelo com os sensores
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    String mac = WiFi.macAddress();
-    Serial.print("[WiFi] MAC: ");
-    Serial.println(mac);
+void writeCSV(const char* path, const DateTime& ts,
+              float temp, float hum, float peso, int ent, int sai) {
+    if (!g_sdOk) return;
+    if (!SD.exists(path)) {
+        File f = SD.open(path, FILE_WRITE);
+        if (f) { f.println("timestamp,temperatura,humidade,peso,entradas,saidas,bateria"); f.close(); }
+    }
+    File f = SD.open(path, FILE_APPEND);
+    if (!f) { Serial.println("[SD] Erro ao abrir ficheiro."); return; }
+    char linha[96];
+    snprintf(linha, sizeof(linha),
+        "%04d-%02d-%02dT%02d:%02d:%02d,%.2f,%.2f,%.3f,%d,%d,0.00",
+        ts.year(), ts.month(), ts.day(),
+        ts.hour(), ts.minute(), ts.second(),
+        temp, hum, peso, ent, sai);
+    f.println(linha);
+    f.close();
+    Serial.printf("[SD] %s\n", linha);
+}
 
-    // ─── Liga alimentação dos sensores ─────────────────────────
-    pinMode(PIN_SENSORES, OUTPUT);
-    digitalWrite(PIN_SENSORES, HIGH);
-    delay(100);
+void httpPost(float temp, float hum, float peso, int ent, int sai) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.begin(client, API_URL);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("x-api-key", API_KEY);
+    char body[300];
+    snprintf(body, sizeof(body),
+        "{\"mac_address\":\"%s\","
+        "\"temperatura\":%.2f,\"humidade\":%.2f,"
+        "\"peso\":%.3f,"
+        "\"entradas_abelhas\":%d,\"saidas_abelhas\":%d,"
+        "\"nivel_bateria\":0.00}",
+        g_mac.c_str(), temp, hum, peso, ent, sai);
+    int code = http.POST(body);
+    Serial.printf("[HTTP] %d\n", code);
+    if (code != 201) Serial.println("[HTTP] " + http.getString());
+    http.end();
+}
 
-    // ─── RTC ───────────────────────────────────────────────────
-    Wire.begin(21, 22);
-    bool rtcOk = rtc.begin();
-    if (!rtcOk) Serial.println("[ERRO] RTC não encontrado!");
+void syncNtp() {
+    configTime(TZ_GMT_OFFSET, TZ_DST_OFFSET, "pool.ntp.org", "time.google.com");
+    struct tm ti;
+    if (g_rtcOk && getLocalTime(&ti, NTP_TIMEOUT_MS)) {
+        rtc.adjust(DateTime(ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday,
+                            ti.tm_hour, ti.tm_min, ti.tm_sec));
+        Serial.println("[NTP] RTC sincronizado.");
+    }
+}
 
-    // ─── DHT22 (2s warmup — WiFi liga em paralelo) ─────────────
-    dht.begin();
-    delay(2000);
+// ═══════════════════════════════════════════════════════════════════════════════
+// LEITURA + RELATÓRIO (reutilizado em ambos os modos)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void doReport(int entradas, int saidas) {
     float temperatura = dht.readTemperature();
     float humidade    = dht.readHumidity();
+    if (isnan(temperatura)) temperatura = 0.0f;
+    if (isnan(humidade))    humidade    = 0.0f;
+    Serial.printf("[DHT22] %.1f°C  %.1f%%\n", temperatura, humidade);
 
-    if (isnan(temperatura) || isnan(humidade)) {
-        Serial.println("[ERRO] DHT22 falhou!");
-        temperatura = 0.0f;
-        humidade    = 0.0f;
-    } else {
-        Serial.printf("[DHT22] Temp: %.1f C  |  Hum: %.1f %%\n", temperatura, humidade);
-    }
+    float peso = readWeight();
 
-    // ─── Aguarda WiFi ──────────────────────────────────────────
-    unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_TIMEOUT_MS) {
-        delay(500);
-    }
-    bool wifiOk = (WiFi.status() == WL_CONNECTED);
-
-    // ─── NTP → actualiza RTC ───────────────────────────────────
-    if (wifiOk && rtcOk) {
-        configTime(TZ_GMT_OFFSET, TZ_DST_OFFSET, "pool.ntp.org", "time.google.com");
-        struct tm timeinfo;
-        if (getLocalTime(&timeinfo, NTP_TIMEOUT_MS)) {
-            rtc.adjust(DateTime(
-                timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                timeinfo.tm_hour,        timeinfo.tm_min,      timeinfo.tm_sec
-            ));
-            Serial.println("[NTP] RTC sincronizado.");
-        } else {
-            Serial.println("[NTP] Timeout — a usar hora do RTC.");
-        }
-    } else if (rtcOk && rtc.lostPower()) {
-        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-        Serial.println("[RTC] Sem NTP — a usar hora de compilação.");
-    }
-
-    // ─── Lê RTC ───────────────────────────────────────────────
     DateTime now(2000, 1, 1, 0, 0, 0);
-    if (rtcOk) {
+    if (g_rtcOk) {
         now = rtc.now();
         Serial.printf("[RTC] %04d/%02d/%02d %02d:%02d:%02d\n",
             now.year(), now.month(), now.day(),
             now.hour(), now.minute(), now.second());
     }
 
-    // ─── MicroSD ───────────────────────────────────────────────
-    const char* csvPath = "/dados.csv";
-    bool sdOk = SD.begin(SD_CS);
+    writeCSV("/dados.csv", now, temperatura, humidade, peso, entradas, saidas);
 
-    if (!sdOk) {
-        Serial.println("[ERRO] MicroSD não encontrado!");
+    if (WiFi.status() == WL_CONNECTED) {
+        httpPost(temperatura, humidade, peso, entradas, saidas);
     } else {
-        Serial.println("[SD] MicroSD inicializado.");
-
-        if (!SD.exists(csvPath)) {
-            File f = SD.open(csvPath, FILE_WRITE);
-            if (f) {
-                f.println("timestamp,temperatura,humidade,peso,entradas,saidas,bateria");
-                f.close();
-                Serial.println("[SD] Cabeçalho CSV criado.");
-            }
-        }
-
-        File f = SD.open(csvPath, FILE_APPEND);
-        if (f) {
-            char linha[80];
-            snprintf(linha, sizeof(linha),
-                "%04d-%02d-%02dT%02d:%02d:%02d,%.2f,%.2f,0.00,0,0,0.00",
-                now.year(), now.month(), now.day(),
-                now.hour(), now.minute(), now.second(),
-                temperatura, humidade);
-            f.println(linha);
-            f.close();
-            Serial.println("[SD] Linha escrita no CSV.");
-        } else {
-            Serial.println("[ERRO] Não foi possível abrir o ficheiro CSV!");
-        }
+        Serial.println("[WiFi] Sem ligação — só SD.");
     }
 
-    // ─── HTTP POST ─────────────────────────────────────────────
-    if (wifiOk) {
-        Serial.println("[WiFi] Ligado.");
-
-        WiFiClientSecure client;
-        client.setInsecure();
-
-        HTTPClient http;
-        http.begin(client, API_URL);
-        http.addHeader("Content-Type", "application/json");
-        http.addHeader("x-api-key", API_KEY);
-
-        char body[256];
-        snprintf(body, sizeof(body),
-            "{\"mac_address\":\"%s\","
-            "\"temperatura\":%.2f,"
-            "\"humidade\":%.2f,"
-            "\"peso\":0.00,"
-            "\"entradas_abelhas\":0,"
-            "\"saidas_abelhas\":0,"
-            "\"nivel_bateria\":0.00}",
-            mac.c_str(), temperatura, humidade);
-
-        int httpCode = http.POST(body);
-        Serial.printf("[HTTP] Resposta: %d\n", httpCode);
-        if (httpCode == 201) {
-            Serial.println("[HTTP] Dados enviados com sucesso.");
-        } else {
-            Serial.println("[HTTP] " + http.getString());
-        }
-        http.end();
-    } else {
-        Serial.println("[WiFi] Sem ligação — dados guardados apenas no SD.");
-    }
-
-    // ─── Desliga WiFi antes do BLE ─────────────────────────────
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
+    if (g_sdOk) runBleServer("/dados.csv");
+}
 
-    // ─── Servidor BLE GATT (30s para sync via app) ─────────────
-    // O utilizador pode ligar a app e fazer sync dos dados do SD
-    if (sdOk) {
-        runBleServer(csvPath);
+// ═══════════════════════════════════════════════════════════════════════════════
+// SETUP
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void setup() {
+    Serial.begin(115200);
+    delay(500);
+    Serial.println("=== ESP32 Acordou ===");
+
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    g_mac = WiFi.macAddress();
+    Serial.print("[WiFi] MAC: "); Serial.println(g_mac);
+
+    // ── Alimentação dos sensores ──────────────────────────────
+    pinMode(PIN_SENSORES, OUTPUT);
+    digitalWrite(PIN_SENSORES, HIGH);
+    delay(100);
+
+    // ── RTC ──────────────────────────────────────────────────
+    Wire.begin(21, 22);
+    g_rtcOk = rtc.begin();
+    if (!g_rtcOk) Serial.println("[ERRO] RTC não encontrado!");
+    else if (rtc.lostPower()) rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+
+    // ── DHT22 + HX711 (2 s warmup partilhado) ────────────────
+    dht.begin();
+    scale.begin();
+    scale.start(2000, false);       // sem auto-tara — usa tara guardada em NVS
+    scale.setCalFactor(CAL_FACTOR);
+
+    Preferences prefs;
+    prefs.begin("hx711", true);     // read-only
+    float savedTare = prefs.getFloat("tare", 0.0f);
+    prefs.end();
+    if (savedTare != 0.0f) {
+        scale.setTareOffset(savedTare);
+        Serial.printf("[HX711] Tara NVS: %.1f\n", savedTare);
+    } else {
+        scale.tare();             // primeira vez: tara e guarda
+        float offset = scale.getTareOffset();
+        prefs.begin("hx711", false);
+        prefs.putFloat("tare", offset);
+        prefs.end();
+        Serial.printf("[HX711] Tara inicial guardada: %.1f\n", offset);
     }
 
-    // ─── Desliga sensores e dorme ──────────────────────────────
-    digitalWrite(PIN_SENSORES, LOW);
-    Serial.printf("[SLEEP] A dormir %d segundos...\n", SLEEP_SEGUNDOS);
-    Serial.flush();
+    // ── MicroSD ───────────────────────────────────────────────
+    g_sdOk = SD.begin(SD_CS);
+    Serial.println(g_sdOk ? "[SD] OK" : "[ERRO] MicroSD não encontrado!");
 
-    esp_sleep_enable_timer_wakeup((uint64_t)SLEEP_SEGUNDOS * uS_TO_S_FACTOR);
+    // ── Aguarda WiFi + NTP ────────────────────────────────────
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_TIMEOUT_MS) delay(500);
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("[WiFi] Ligado.");
+        syncNtp();
+    }
+
+#ifdef PREMIUM_MODE
+    // ── Modo Premium: interrupções IR + loop activo ──────────
+    pinMode(IR_A_PIN, INPUT_PULLUP);
+    pinMode(IR_B_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(IR_A_PIN), onIrA, FALLING);
+    attachInterrupt(digitalPinToInterrupt(IR_B_PIN), onIrB, FALLING);
+    Serial.println("[IR] Interrupções activas (modo Premium).");
+
+    // Primeiro relatório imediato
+    doReport(0, 0);
+
+    // Reconecta WiFi para o loop
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+#else
+    // ── Modo Base: lê, escreve, dorme ────────────────────────
+    doReport(0, 0);     // contadores IR = 0 (ESP32 estava a dormir)
+
+    digitalWrite(PIN_SENSORES, LOW);
+    Serial.printf("[SLEEP] A dormir %d s...\n", SLEEP_SECS);
+    Serial.flush();
+    esp_sleep_enable_timer_wakeup((uint64_t)SLEEP_SECS * uS_TO_S);
     esp_deep_sleep_start();
+#endif
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOOP (apenas no modo Premium)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#ifdef PREMIUM_MODE
+static unsigned long g_lastReport = 0;
 
 void loop() {
-    // Nunca chega aqui — o ESP32 reinicia após Deep Sleep
+    scale.update();   // mantém buffer HX711 actualizado
+
+    if (millis() - g_lastReport >= REPORT_MS) {
+        g_lastReport = millis();
+
+        // Captura atómica dos contadores IR
+        noInterrupts();
+        int ent = g_entradas;
+        int sai = g_saidas;
+        g_entradas = 0;
+        g_saidas   = 0;
+        interrupts();
+
+        Serial.printf("[IR] Entradas: %d  Saídas: %d\n", ent, sai);
+        doReport(ent, sai);
+
+        // Reconecta WiFi após BLE
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    }
 }
+#else
+void loop() {}
+#endif
