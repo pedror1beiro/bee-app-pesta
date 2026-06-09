@@ -251,7 +251,9 @@ function Header({ status, lastUpdate, utilizador, colmeia, onLogout }) {
 }
 
 // ─── SELECTOR DE COLMEIA ──────────────────────────────────────────────────────
-function SelectorColmeia({ colmeias, colmeiaAtiva, onChange, onNova }) {
+function SelectorColmeia({ colmeias, colmeiaAtiva, onChange, onNova, onToggleModo, togglingModo }) {
+  const isPremium = colmeiaAtiva?.modo === "premium";
+
   return (
     <div className="flex items-center gap-3 flex-wrap">
       <div className="flex bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
@@ -276,6 +278,26 @@ function SelectorColmeia({ colmeias, colmeiaAtiva, onChange, onNova }) {
       >
         + Nova colmeia
       </button>
+
+      {colmeiaAtiva && (
+        <button
+          onClick={onToggleModo}
+          disabled={togglingModo}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold transition-all
+            ${isPremium
+              ? "bg-amber-50 border-amber-300 text-amber-600 hover:bg-amber-100"
+              : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"
+            } disabled:opacity-50`}
+          title={isPremium ? "Mudar para BASE (deep sleep)" : "Mudar para PREMIUM (sempre activo)"}
+        >
+          {togglingModo ? (
+            <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <span>{isPremium ? "⭐" : "🔋"}</span>
+          )}
+          {isPremium ? "PREMIUM" : "BASE"}
+        </button>
+      )}
     </div>
   );
 }
@@ -408,6 +430,7 @@ export default function Dashboard({ utilizador, onLogout }) {
   const [lastUpdate,    setLastUpdate]    = useState(null);
   const [erro,          setErro]          = useState(null);
   const [modalAberto,   setModalAberto]   = useState(false);
+  const [togglingModo,  setTogglingModo]  = useState(false);
 
   // Carregar lista de colmeias
   useEffect(() => {
@@ -453,6 +476,27 @@ export default function Dashboard({ utilizador, onLogout }) {
     return () => clearInterval(interval);
   }, [fetchDados]);
 
+  // Alternar modo BASE / PREMIUM
+  async function toggleModo() {
+    if (!colmeiaAtiva) return;
+    const novoModo = colmeiaAtiva.modo === "premium" ? "base" : "premium";
+    setTogglingModo(true);
+    try {
+      const res = await apiFetch(`/api/colmeias/${colmeiaAtiva.id}/modo`, {
+        method: "PUT",
+        body: JSON.stringify({ modo: novoModo }),
+      });
+      if (!res.ok) throw new Error();
+      const atualizada = { ...colmeiaAtiva, modo: novoModo };
+      setColmeiaAtiva(atualizada);
+      setColmeias(prev => prev.map(c => c.id === atualizada.id ? atualizada : c));
+    } catch {
+      setErro("Erro ao alterar o modo da colmeia.");
+    } finally {
+      setTogglingModo(false);
+    }
+  }
+
   // Criar nova colmeia
   async function criarColmeia(dados) {
     const res  = await apiFetch("/api/colmeias", {
@@ -485,6 +529,8 @@ export default function Dashboard({ utilizador, onLogout }) {
             colmeiaAtiva={colmeiaAtiva}
             onChange={c => { setColmeiaAtiva(c); setData([]); }}
             onNova={() => setModalAberto(true)}
+            onToggleModo={toggleModo}
+            togglingModo={togglingModo}
           />
         )}
 

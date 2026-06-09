@@ -12,4 +12,5 @@ class ApiConstants {
   static String alertaLido(int id)         => '/api/alertas/$id/lido';
   static String colmeiaLeituras(int id)    => '/api/colmeias/$id/leituras';
   static String deleteColmeia(int id)      => '/api/colmeias/$id';
+  static String colmeiaModo(int id)        => '/api/colmeias/$id/modo';
 }

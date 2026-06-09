@@ -5,27 +5,117 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/date_utils.dart';
 import '../../data/models/colmeia.dart';
 import '../../data/models/leitura.dart';
+import '../../data/repositories/colmeia_repository.dart';
 import '../../data/repositories/leitura_repository.dart';
 import '../../shared/widgets/loading_error_view.dart';
 import 'widgets/hourly_strip.dart';
 import 'widgets/metric_card.dart';
 import 'widgets/weight_card.dart';
 
-class HiveDetailPage extends ConsumerWidget {
+class HiveDetailPage extends ConsumerStatefulWidget {
   final Colmeia colmeia;
   const HiveDetailPage({super.key, required this.colmeia});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final leiturasAsync = ref.watch(leiturasProvider(colmeia.id));
+  ConsumerState<HiveDetailPage> createState() => _HiveDetailPageState();
+}
+
+class _HiveDetailPageState extends ConsumerState<HiveDetailPage> {
+  late Colmeia _colmeia;
+  bool _updatingModo = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _colmeia = widget.colmeia;
+  }
+
+  Future<void> _toggleModo() async {
+    final novoModo = _colmeia.isPremium ? 'base' : 'premium';
+    setState(() => _updatingModo = true);
+    try {
+      final updated = await ref
+          .read(colmeiaRepositoryProvider)
+          .updateModo(_colmeia.id, novoModo);
+      setState(() => _colmeia = updated);
+      ref.invalidate(colmeiasProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Modo alterado para ${novoModo.toUpperCase()}.'),
+          backgroundColor: novoModo == 'premium' ? AppTheme.honey : AppTheme.bark60,
+        ));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Erro ao alterar modo.'),
+          backgroundColor: AppTheme.danger,
+        ));
+      }
+    } finally {
+      setState(() => _updatingModo = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final leiturasAsync = ref.watch(leiturasProvider(_colmeia.id));
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(colmeia.nome),
+        title: Text(_colmeia.nome),
         actions: [
+          _updatingModo
+              ? const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.honey),
+                  ),
+                )
+              : Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: GestureDetector(
+                    onTap: _toggleModo,
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _colmeia.isPremium
+                            ? AppTheme.honey.withValues(alpha: 0.18)
+                            : AppTheme.bark60.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _colmeia.isPremium ? AppTheme.honey : AppTheme.bark60,
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(
+                          _colmeia.isPremium
+                              ? Icons.stars_rounded
+                              : Icons.battery_saver_rounded,
+                          size: 14,
+                          color: _colmeia.isPremium ? AppTheme.honey : AppTheme.bark30,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _colmeia.isPremium ? 'PREMIUM' : 'BASE',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: _colmeia.isPremium ? AppTheme.honey : AppTheme.bark30,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ),
+                ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
-            onPressed: () => ref.invalidate(leiturasProvider(colmeia.id)),
+            onPressed: () => ref.invalidate(leiturasProvider(_colmeia.id)),
           ),
         ],
       ),
@@ -33,7 +123,7 @@ class HiveDetailPage extends ConsumerWidget {
         loading: () => const LoadingView(),
         error:   (e, _) => ErrorView(
           message: 'Erro ao carregar dados.',
-          onRetry: () => ref.invalidate(leiturasProvider(colmeia.id)),
+          onRetry: () => ref.invalidate(leiturasProvider(_colmeia.id)),
         ),
         data: (leituras) {
           if (leituras.isEmpty) {

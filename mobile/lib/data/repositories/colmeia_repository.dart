@@ -43,6 +43,12 @@ class ColmeiaRepository {
   Future<void> deleteColmeia(int id) =>
       _api.dio.delete(ApiConstants.deleteColmeia(id));
 
+  Future<Colmeia> updateModo(int id, String modo) async {
+    await _api.dio.put(ApiConstants.colmeiaModo(id), data: {'modo': modo});
+    final colmeias = await getColmeias();
+    return colmeias.firstWhere((c) => c.id == id);
+  }
+
   Future<List<Alerta>> getAlertas() async {
     final res = await _api.dio.get(ApiConstants.alertas);
     return (res.data as List)

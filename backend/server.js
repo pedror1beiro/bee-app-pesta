@@ -58,11 +58,17 @@ const db = mysql.createPool({
     decimalNumbers: true,  // DECIMAL columns returned as numbers, not strings
 });
 
-// Teste de ligação ao arrancar
+// Teste de ligação e migrações ao arrancar
 (async () => {
     try {
         await db.query('SELECT 1');
         console.log('✅ Ligação segura à base de dados estabelecida com sucesso!');
+
+        // Migração: adicionar coluna modo se ainda não existir
+        await db.query(`
+            ALTER TABLE colmeias
+            ADD COLUMN IF NOT EXISTS modo ENUM('base','premium') NOT NULL DEFAULT 'base'
+        `);
     } catch (err) {
         console.error('❌ Erro crítico: Não foi possível ligar ao MySQL:', err.message);
     }
@@ -603,6 +609,59 @@ app.patch('/api/admin/utilizadores/:id/ativar', autenticar, apenasAdmin, async (
         res.json({ mensagem: `Utilizador ${ativo ? 'ativado' : 'desativado'} com sucesso.` });
     } catch (err) {
         console.error('Erro ao atualizar utilizador:', err);
+        res.status(500).json({ erro: 'Erro interno.' });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROTAS DE MODO (BASE / PREMIUM)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/colmeia/modo/:mac
+ * ESP32 consulta o modo configurado — protegido por API Key
+ */
+app.get('/api/colmeia/modo/:mac', async (req, res) => {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey || apiKey !== process.env.ESP32_API_KEY) {
+        return res.status(401).json({ erro: 'API Key inválida.' });
+    }
+
+    try {
+        const [rows] = await db.query(
+            'SELECT modo FROM colmeias WHERE mac_address = ?',
+            [req.params.mac.toUpperCase()]
+        );
+        if (rows.length === 0) return res.status(404).json({ erro: 'MAC não encontrado.' });
+        res.json({ modo: rows[0].modo });
+    } catch (err) {
+        console.error('Erro ao obter modo:', err);
+        res.status(500).json({ erro: 'Erro interno.' });
+    }
+});
+
+/**
+ * PUT /api/colmeias/:id/modo
+ * App define o modo da colmeia — protegido por JWT
+ */
+app.put('/api/colmeias/:id/modo', autenticar, async (req, res) => {
+    const { modo } = req.body;
+    if (modo !== 'base' && modo !== 'premium') {
+        return res.status(400).json({ erro: 'Modo inválido. Use "base" ou "premium".' });
+    }
+
+    try {
+        const [rows] = await db.query('SELECT * FROM colmeias WHERE id = ?', [req.params.id]);
+        if (rows.length === 0) return res.status(404).json({ erro: 'Colmeia não encontrada.' });
+
+        if (rows[0].utilizador_id !== req.utilizador.id && req.utilizador.role !== 'admin') {
+            return res.status(403).json({ erro: 'Sem permissão.' });
+        }
+
+        await db.query('UPDATE colmeias SET modo = ? WHERE id = ?', [modo, req.params.id]);
+        res.json({ mensagem: `Modo alterado para ${modo}.`, modo });
+    } catch (err) {
+        console.error('Erro ao atualizar modo:', err);
         res.status(500).json({ erro: 'Erro interno.' });
     }
 });
