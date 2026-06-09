@@ -443,11 +443,28 @@ function Skeleton() {
 
 // ─── HISTÓRICO ────────────────────────────────────────────────────────────────
 function Historico({ colmeiaAtiva, apiFetch }) {
-  const [rows,    setRows]    = useState([]);
-  const [total,   setTotal]   = useState(0);
-  const [pages,   setPages]   = useState(1);
-  const [page,    setPage]    = useState(1);
-  const [loading, setLoading] = useState(false);
+  const [rows,       setRows]       = useState([]);
+  const [total,      setTotal]      = useState(0);
+  const [pages,      setPages]      = useState(1);
+  const [page,       setPage]       = useState(1);
+  const [loading,    setLoading]    = useState(false);
+  const [exporting,  setExporting]  = useState(false);
+
+  async function exportarCSV() {
+    setExporting(true);
+    try {
+      const res  = await apiFetch(`/api/colmeias/${colmeiaAtiva.id}/historico/export`);
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `${colmeiaAtiva.nome}_historico.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     if (!colmeiaAtiva) return;
@@ -465,6 +482,11 @@ function Historico({ colmeiaAtiva, apiFetch }) {
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs text-slate-400 font-medium">{total} leituras no total</p>
         <div className="flex items-center gap-2">
+          <button onClick={exportarCSV} disabled={exporting || total === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50
+                       text-emerald-700 text-xs font-semibold hover:bg-emerald-100 disabled:opacity-40 transition-all">
+            {exporting ? "A exportar..." : "⬇ Exportar CSV"}
+          </button>
           <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
             className="px-3 py-1 rounded-lg border text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">←</button>
           <span className="text-sm text-slate-500">{page} / {pages}</span>

@@ -563,6 +563,38 @@ app.get('/api/colmeias/:id/historico', autenticar, async (req, res) => {
 });
 
 /**
+ * GET /api/colmeias/:id/historico/export
+ * Exporta todas as leituras em CSV
+ */
+app.get('/api/colmeias/:id/historico/export', autenticar, async (req, res) => {
+    try {
+        const [colmeia] = await db.query('SELECT * FROM colmeias WHERE id = ?', [req.params.id]);
+        if (colmeia.length === 0) return res.status(404).json({ erro: 'Colmeia não encontrada.' });
+        if (colmeia[0].utilizador_id !== req.utilizador.id && req.utilizador.role !== 'admin') {
+            return res.status(403).json({ erro: 'Sem permissão.' });
+        }
+
+        const [rows] = await db.query(
+            'SELECT * FROM leituras_colmeia WHERE colmeia_id = ? ORDER BY timestamp ASC',
+            [req.params.id]
+        );
+
+        const nome = colmeia[0].nome.replace(/[^a-zA-Z0-9_-]/g, '_');
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${nome}_historico.csv"`);
+
+        res.write('timestamp,temperatura,humidade,peso,entradas_abelhas,saidas_abelhas,nivel_bateria\n');
+        for (const r of rows) {
+            res.write(`${r.timestamp},${r.temperatura},${r.humidade},${r.peso},${r.entradas_abelhas},${r.saidas_abelhas},${r.nivel_bateria}\n`);
+        }
+        res.end();
+    } catch (err) {
+        console.error('Erro ao exportar CSV:', err);
+        res.status(500).json({ erro: 'Erro interno.' });
+    }
+});
+
+/**
  * GET /api/dados/:colmeia_id
  * Leitura dos últimos 20 registos — protegido (só o dono ou admin)
  */
