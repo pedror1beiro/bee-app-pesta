@@ -7,7 +7,7 @@ import {
 } from "recharts";
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const POLL_INTERVAL = 10000;
+const POLL_INTERVAL = 3000;
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 function formatTimestamp(ts) {
@@ -118,25 +118,46 @@ function PesoChart({ data }) {
 }
 
 function AtividadeChart({ data }) {
-  const latest = getLatest(data);
-  const saldo  = latest ? latest.entradas_abelhas - latest.saidas_abelhas : 0;
+  const totalEntradas = data.reduce((s, r) => s + (r.entradas_abelhas || 0), 0);
+  const totalSaidas   = data.reduce((s, r) => s + (r.saidas_abelhas   || 0), 0);
+  const saldoGlobal   = totalEntradas - totalSaidas;
+
   return (
     <Card title="Atividade das Abelhas" icon="🐝" badges={[
-      <StatBadge key="e" label="Entradas" value={latest?.entradas_abelhas} unit="" color="green" />,
-      <StatBadge key="s" label="Saídas"   value={latest?.saidas_abelhas}   unit="" color="red"   />,
-      <StatBadge key="b" label="Saldo"    value={saldo}                    unit="" color="amber" />,
+      <StatBadge key="e" label="Total Entradas" value={totalEntradas} unit="" color="green" />,
+      <StatBadge key="s" label="Total Saídas"   value={totalSaidas}   unit="" color="red"   />,
+      <StatBadge key="b" label="Saldo Global"   value={saldoGlobal}   unit="" color="amber" />,
     ]}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 5, right: 16, left: -10, bottom: 0 }} barCategoryGap="35%">
-          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-          <XAxis dataKey="hora" tick={{ fontSize: 11, fill: "#94a3b8" }} tickLine={false} axisLine={false} />
-          <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} tickLine={false} axisLine={false} />
-          <Tooltip content={<CustomTooltip />} />
-          <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-          <Bar dataKey="entradas_abelhas" name="Entradas" fill="#10b981" radius={[4,4,0,0]} />
-          <Bar dataKey="saidas_abelhas"   name="Saídas"   fill="#ef4444" radius={[4,4,0,0]} />
-        </BarChart>
-      </ResponsiveContainer>
+      <div className="flex flex-col h-full">
+        {/* Saldo global em destaque */}
+        <div className="flex items-center justify-center py-3 mb-2">
+          <div className={`flex flex-col items-center px-8 py-4 rounded-2xl border-2
+            ${saldoGlobal >= 0
+              ? "bg-emerald-50 border-emerald-200"
+              : "bg-red-50 border-red-200"}`}>
+            <span className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-1">Saldo Global</span>
+            <span className={`text-4xl font-extrabold ${saldoGlobal >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+              {saldoGlobal >= 0 ? "+" : ""}{saldoGlobal}
+            </span>
+            <span className="text-xs text-slate-400 mt-1">abelhas no interior (estimativa)</span>
+          </div>
+        </div>
+
+        {/* Gráfico por leitura */}
+        <div className="flex-1" style={{ minHeight: 100 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} margin={{ top: 0, right: 16, left: -10, bottom: 0 }} barCategoryGap="35%">
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="hora" tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 11, paddingTop: 4 }} />
+              <Bar dataKey="entradas_abelhas" name="Entradas" fill="#10b981" radius={[4,4,0,0]} />
+              <Bar dataKey="saidas_abelhas"   name="Saídas"   fill="#ef4444" radius={[4,4,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
     </Card>
   );
 }

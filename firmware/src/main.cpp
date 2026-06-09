@@ -50,8 +50,8 @@ static bool   g_sdOk     = false;
 static bool   g_isPremium = false;
 
 // ─── Contadores IR ────────────────────────────────────────────────────────────
-volatile unsigned long irATime   = 0;
-volatile unsigned long irBTime   = 0;
+volatile unsigned long irATime    = 0;
+volatile unsigned long irBTime    = 0;
 volatile int           g_entradas = 0;
 volatile int           g_saidas   = 0;
 
@@ -373,10 +373,10 @@ void setup() {
     g_isPremium = fetchModo();
 
     if (g_isPremium) {
-        pinMode(IR_A_PIN, INPUT_PULLUP);
-        pinMode(IR_B_PIN, INPUT_PULLUP);
-        attachInterrupt(digitalPinToInterrupt(IR_A_PIN), onIrA, FALLING);
-        attachInterrupt(digitalPinToInterrupt(IR_B_PIN), onIrB, FALLING);
+        pinMode(IR_A_PIN, INPUT);
+        pinMode(IR_B_PIN, INPUT);
+        attachInterrupt(digitalPinToInterrupt(IR_A_PIN), onIrA, CHANGE);
+        attachInterrupt(digitalPinToInterrupt(IR_B_PIN), onIrB, CHANGE);
         Serial.println("[IR] Interrupções activas (PREMIUM).");
         doReport(0, 0);
         WiFi.mode(WIFI_STA);
