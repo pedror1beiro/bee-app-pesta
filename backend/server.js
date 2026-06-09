@@ -503,6 +503,66 @@ app.post('/api/colmeias/:id/leituras', autenticar, async (req, res) => {
 });
 
 /**
+ * GET /api/colmeias/:id/resumo
+ * Totais acumulados desde o início
+ */
+app.get('/api/colmeias/:id/resumo', autenticar, async (req, res) => {
+    try {
+        const [colmeia] = await db.query('SELECT * FROM colmeias WHERE id = ?', [req.params.id]);
+        if (colmeia.length === 0) return res.status(404).json({ erro: 'Colmeia não encontrada.' });
+        if (colmeia[0].utilizador_id !== req.utilizador.id && req.utilizador.role !== 'admin') {
+            return res.status(403).json({ erro: 'Sem permissão.' });
+        }
+        const [[t]] = await db.query(`
+            SELECT
+                COALESCE(SUM(entradas_abelhas), 0) AS total_entradas,
+                COALESCE(SUM(saidas_abelhas),   0) AS total_saidas,
+                COUNT(*) AS total_leituras,
+                MIN(timestamp) AS primeira_leitura
+            FROM leituras_colmeia WHERE colmeia_id = ?
+        `, [req.params.id]);
+        res.json({
+            total_entradas:  t.total_entradas,
+            total_saidas:    t.total_saidas,
+            saldo:           t.total_entradas - t.total_saidas,
+            total_leituras:  t.total_leituras,
+            primeira_leitura: t.primeira_leitura,
+        });
+    } catch (err) {
+        console.error('Erro ao obter resumo:', err);
+        res.status(500).json({ erro: 'Erro interno.' });
+    }
+});
+
+/**
+ * GET /api/colmeias/:id/historico?page=1&per_page=50
+ * Todas as leituras com paginação
+ */
+app.get('/api/colmeias/:id/historico', autenticar, async (req, res) => {
+    try {
+        const [colmeia] = await db.query('SELECT * FROM colmeias WHERE id = ?', [req.params.id]);
+        if (colmeia.length === 0) return res.status(404).json({ erro: 'Colmeia não encontrada.' });
+        if (colmeia[0].utilizador_id !== req.utilizador.id && req.utilizador.role !== 'admin') {
+            return res.status(403).json({ erro: 'Sem permissão.' });
+        }
+        const page     = Math.max(1, parseInt(req.query.page)     || 1);
+        const perPage  = Math.min(200, parseInt(req.query.per_page) || 50);
+        const offset   = (page - 1) * perPage;
+
+        const [[{ total }]] = await db.query(
+            'SELECT COUNT(*) AS total FROM leituras_colmeia WHERE colmeia_id = ?', [req.params.id]);
+        const [rows] = await db.query(
+            'SELECT * FROM leituras_colmeia WHERE colmeia_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?',
+            [req.params.id, perPage, offset]);
+
+        res.json({ total, page, per_page: perPage, pages: Math.ceil(total / perPage), rows });
+    } catch (err) {
+        console.error('Erro ao obter histórico:', err);
+        res.status(500).json({ erro: 'Erro interno.' });
+    }
+});
+
+/**
  * GET /api/dados/:colmeia_id
  * Leitura dos últimos 20 registos — protegido (só o dono ou admin)
  */

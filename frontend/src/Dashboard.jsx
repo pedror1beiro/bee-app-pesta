@@ -117,10 +117,11 @@ function PesoChart({ data }) {
   );
 }
 
-function AtividadeChart({ data }) {
-  const totalEntradas = data.reduce((s, r) => s + (r.entradas_abelhas || 0), 0);
-  const totalSaidas   = data.reduce((s, r) => s + (r.saidas_abelhas   || 0), 0);
-  const saldoGlobal   = totalEntradas - totalSaidas;
+function AtividadeChart({ data, resumo }) {
+  const totalEntradas = resumo?.total_entradas ?? data.reduce((s, r) => s + (r.entradas_abelhas || 0), 0);
+  const totalSaidas   = resumo?.total_saidas   ?? data.reduce((s, r) => s + (r.saidas_abelhas   || 0), 0);
+  const saldoGlobal   = resumo?.saldo          ?? (totalEntradas - totalSaidas);
+  const totalLeituras = resumo?.total_leituras ?? data.length;
 
   return (
     <Card title="Atividade das Abelhas" icon="🐝" badges={[
@@ -139,7 +140,7 @@ function AtividadeChart({ data }) {
             <span className={`text-4xl font-extrabold ${saldoGlobal >= 0 ? "text-emerald-600" : "text-red-500"}`}>
               {saldoGlobal >= 0 ? "+" : ""}{saldoGlobal}
             </span>
-            <span className="text-xs text-slate-400 mt-1">abelhas no interior (estimativa)</span>
+            <span className="text-xs text-slate-400 mt-1">abelhas no interior · {totalLeituras} leituras totais</span>
           </div>
         </div>
 
@@ -440,6 +441,88 @@ function Skeleton() {
   );
 }
 
+// ─── HISTÓRICO ────────────────────────────────────────────────────────────────
+function Historico({ colmeiaAtiva, apiFetch }) {
+  const [rows,    setRows]    = useState([]);
+  const [total,   setTotal]   = useState(0);
+  const [pages,   setPages]   = useState(1);
+  const [page,    setPage]    = useState(1);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!colmeiaAtiva) return;
+    setLoading(true);
+    apiFetch(`/api/colmeias/${colmeiaAtiva.id}/historico?page=${page}&per_page=50`)
+      .then(r => r.json())
+      .then(j => { setRows(j.rows || []); setTotal(j.total || 0); setPages(j.pages || 1); })
+      .finally(() => setLoading(false));
+  }, [colmeiaAtiva, page, apiFetch]);
+
+  if (!colmeiaAtiva) return null;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs text-slate-400 font-medium">{total} leituras no total</p>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+            className="px-3 py-1 rounded-lg border text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">←</button>
+          <span className="text-sm text-slate-500">{page} / {pages}</span>
+          <button onClick={() => setPage(p => Math.min(pages, p + 1))} disabled={page === pages}
+            className="px-3 py-1 rounded-lg border text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">→</button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-10 text-slate-400">A carregar...</div>
+      ) : (
+        <div className="overflow-x-auto rounded-2xl border border-slate-100 shadow-sm">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
+                <th className="px-4 py-3 text-left">Data / Hora</th>
+                <th className="px-4 py-3 text-right">Temp (°C)</th>
+                <th className="px-4 py-3 text-right">Hum (%)</th>
+                <th className="px-4 py-3 text-right">Peso (kg)</th>
+                <th className="px-4 py-3 text-right">Entradas</th>
+                <th className="px-4 py-3 text-right">Saídas</th>
+                <th className="px-4 py-3 text-right">Bateria (V)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {rows.map((r, i) => (
+                <tr key={r.id} className={i % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
+                  <td className="px-4 py-2.5 font-mono text-xs text-slate-500">
+                    {new Date(r.timestamp).toLocaleString("pt-PT")}
+                  </td>
+                  <td className={`px-4 py-2.5 text-right font-semibold ${r.temperatura > 36 ? "text-red-500" : "text-slate-700"}`}>
+                    {Number(r.temperatura).toFixed(1)}
+                  </td>
+                  <td className={`px-4 py-2.5 text-right font-semibold ${r.humidade > 70 ? "text-blue-500" : "text-slate-700"}`}>
+                    {Number(r.humidade).toFixed(0)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-emerald-600 font-semibold">
+                    {Number(r.peso).toFixed(3)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-emerald-500 font-bold">
+                    +{r.entradas_abelhas}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-red-400 font-bold">
+                    -{r.saidas_abelhas}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-purple-500">
+                    {Number(r.nivel_bateria).toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── DASHBOARD PRINCIPAL ──────────────────────────────────────────────────────
 export default function Dashboard({ utilizador, onLogout }) {
   const { apiFetch } = useAuth();
@@ -447,11 +530,13 @@ export default function Dashboard({ utilizador, onLogout }) {
   const [colmeias,      setColmeias]      = useState([]);
   const [colmeiaAtiva,  setColmeiaAtiva]  = useState(null);
   const [data,          setData]          = useState([]);
+  const [resumo,        setResumo]        = useState(null);
   const [status,        setStatus]        = useState("loading");
   const [lastUpdate,    setLastUpdate]    = useState(null);
   const [erro,          setErro]          = useState(null);
   const [modalAberto,   setModalAberto]   = useState(false);
   const [togglingModo,  setTogglingModo]  = useState(false);
+  const [tab,           setTab]           = useState("dashboard"); // "dashboard" | "historico"
 
   // Carregar lista de colmeias
   useEffect(() => {
@@ -477,9 +562,14 @@ export default function Dashboard({ utilizador, onLogout }) {
   const fetchDados = useCallback(async () => {
     if (!colmeiaAtiva) return;
     try {
-      const res  = await apiFetch(`/api/dados/${colmeiaAtiva.id}`);
-      const json = await res.json();
+      const [resDados, resResumo] = await Promise.all([
+        apiFetch(`/api/dados/${colmeiaAtiva.id}`),
+        apiFetch(`/api/colmeias/${colmeiaAtiva.id}/resumo`),
+      ]);
+      const json   = await resDados.json();
+      const jResumo = await resResumo.json();
       setData(json.map(item => ({ ...item, hora: formatTimestamp(item.timestamp) })));
+      setResumo(jResumo);
       setStatus("online");
       setErro(null);
       setLastUpdate(new Date().toLocaleTimeString("pt-PT"));
@@ -543,8 +633,9 @@ export default function Dashboard({ utilizador, onLogout }) {
 
       <main className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 space-y-5">
 
-        {/* Selector de colmeias */}
+        {/* Selector de colmeias + tabs */}
         {colmeias.length > 0 && (
+          <div className="flex flex-col gap-3">
           <SelectorColmeia
             colmeias={colmeias}
             colmeiaAtiva={colmeiaAtiva}
@@ -553,6 +644,17 @@ export default function Dashboard({ utilizador, onLogout }) {
             onToggleModo={toggleModo}
             togglingModo={togglingModo}
           />
+          {/* Tabs */}
+          <div className="flex bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm w-fit">
+            {[["dashboard","📊 Dashboard"],["historico","📋 Histórico"]].map(([key, label]) => (
+              <button key={key} onClick={() => setTab(key)}
+                className={`px-5 py-2 text-sm font-semibold transition-all
+                  ${tab === key ? "bg-amber-500 text-white" : "text-slate-600 hover:bg-amber-50"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          </div>
         )}
 
         {/* Sem colmeias */}
@@ -593,13 +695,18 @@ export default function Dashboard({ utilizador, onLogout }) {
         )}
 
         {/* Gráficos */}
-        {data.length > 0 && (
+        {tab === "dashboard" && data.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <ClimaChart    data={data} />
             <PesoChart     data={data} />
-            <AtividadeChart data={data} />
+            <AtividadeChart data={data} resumo={resumo} />
             <BateriaChart  data={data} />
           </div>
+        )}
+
+        {/* Histórico */}
+        {tab === "historico" && colmeiaAtiva && (
+          <Historico colmeiaAtiva={colmeiaAtiva} apiFetch={apiFetch} />
         )}
 
         {/* Rodapé */}
