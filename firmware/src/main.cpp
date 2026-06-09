@@ -168,7 +168,8 @@ void runBleServer(const char* csvPath) {
 
     if (!bleDone) Serial.println("[BLE] Timeout.");
     NimBLEDevice::stopAdvertising();
-    NimBLEDevice::deinit(true);
+    delay(200);
+    NimBLEDevice::deinit(false);
     pDataChar = nullptr;
 }
 
@@ -244,7 +245,7 @@ void syncNtp() {
 bool fetchModo() {
     Preferences prefs;
     if (WiFi.status() != WL_CONNECTED) {
-        prefs.begin("modo", true);
+        prefs.begin("modo", false);
         bool cached = prefs.getBool("premium", false);
         prefs.end();
         Serial.printf("[MODO] Sem WiFi — NVS: %s\n", cached ? "PREMIUM" : "BASE");
@@ -268,7 +269,7 @@ bool fetchModo() {
         prefs.end();
         Serial.printf("[MODO] API → %s\n", isPremium ? "PREMIUM" : "BASE");
     } else {
-        prefs.begin("modo", true);
+        prefs.begin("modo", false);
         isPremium = prefs.getBool("premium", false);
         prefs.end();
         Serial.printf("[MODO] HTTP %d — NVS: %s\n", code, isPremium ? "PREMIUM" : "BASE");

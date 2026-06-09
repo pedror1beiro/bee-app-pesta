@@ -65,10 +65,14 @@ const db = mysql.createPool({
         console.log('✅ Ligação segura à base de dados estabelecida com sucesso!');
 
         // Migração: adicionar coluna modo se ainda não existir
-        await db.query(`
-            ALTER TABLE colmeias
-            ADD COLUMN IF NOT EXISTS modo ENUM('base','premium') NOT NULL DEFAULT 'base'
+        const [cols] = await db.query(`
+            SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'colmeias' AND COLUMN_NAME = 'modo'
         `);
+        if (cols.length === 0) {
+            await db.query(`ALTER TABLE colmeias ADD COLUMN modo ENUM('base','premium') NOT NULL DEFAULT 'base'`);
+            console.log('✅ Coluna modo adicionada à tabela colmeias.');
+        }
     } catch (err) {
         console.error('❌ Erro crítico: Não foi possível ligar ao MySQL:', err.message);
     }
